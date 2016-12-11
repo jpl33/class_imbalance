@@ -1,0 +1,146 @@
+---
+title: " Class Imbalance deep dive"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+
+## Introduction 
+
+Despite many the existence of many tutorials  that explain what class Imbalance IS, there aren't many that explain how to mitigate it, besides pointing you the relevant methods/packages.
+In this tutorial I will attempt to show the effects of three popular methods of mitigating class Imbalance, the differences between them and the considerations as to when and how to use them best.
+We'll skip the introduction to Class Imbalance as other sites have done that very well already [^1] and [^2] , and we'll jump to the technical treatment of mitigations.
+
+[^1]: https://www.analyticsvidhya.com/blog/2016/03/practical-guide-deal-imbalanced-classification-problems/
+
+[^2]: http://svds.com/learning-imbalanced-classes/
+
+[^3]: Batista, prati, monard (2004) http://sci2s.ugr.es/keel/dataset/includes/catImbFiles/2004-Batista-SIGKDD.pdf 
+
+The most effective way of dealing with Class  Imbalance is oversampling the minority class. We will cover two methods of synthetic minority data generation: Smote and Rose. We will also cover an undersampling method: Tomek Links.
+A comparison of methods to deal with class imbalance is presented in [^3]. The authors took a selection of Imbalanced data sets from the UCI repository [^4] and tried to mitigate the imbalance using  several mitigation methods. They ranked their classification results according to the AUC (Area Under Curve), as we also shall do.
+
+* Their main conclusions are:
+    + Class Imbalance does not necessarily hamper classification. However, when coupled with *overlap* between the classes, Class Imbalance can seriously hamper classification.
+    + Undersampling methods generally had a lower effect on classification success than oversampling.
+    + Random Oversampling was comparable to analytical Oversampling (mainly Smote) in improving classification efforts.
+  
+## Methodology
+1. We generated two pairs of datasets ( 4 overall): majority and minority classes for the training set, and majority and minority classes for the test set. The sets were generated from 2-dimensional and 4- dimensional normal distributions using R function "mvrnorm".
+The Incidence Ratio (IR) between majority and minority was 10. Initially 200 Majority,and 20 minority points were produced and combined into 220 -point data sets. 
+2. We trained a standard random forest ( R package "rf") on the Imbalanced training set, then used it to predict values for the training set.
+3. We then proceeded to produce a balanced training data set, using the mitigation methods mentioned above.
+4. We then trained our rf model on the balanced training data set, and proceeded to predict the test set values with the modified model.
+5. We will also review mitigation method impact on data sets that are composed of 2200 points- 2000 majority and 200 minority - to display the effect of minority class absolute size on classification. 
+## Data set Code
+
+
+```{r , results='hide' , message=FALSE, echo=FALSE,cache=TRUE}
+require(MASS)
+require(ggplot2)
+require(corpcor)
+require(FNN)
+require(randomForest)
+require(DMwR)
+require(ROSE)
+require(unbalanced)
+require(UBL)
+require(mlr)
+require(gridExtra)
+
+set.seed(2385)
+# A. build arbitrary covariance matrices 
+
+X1 <- matrix(c(4, 1.2, 2.5, 4), 2)
+X2<-matrix(c(7, 3, 3, 8), 2)
+
+# # B. create 2 2-d noramlly dostributed data sets according to covariance matrices and arbitrary means: not too close, not too far
+r1<-mvrnorm(200,c(10,8),as.matrix(X1))
+r2<-mvrnorm(20,c(6,7),as.matrix(X2))
+# add a source column, showing which point belongs to which class 
+r1<-cbind(r1,rep(as.numeric(0), nrow(r1)))
+r2<-cbind(r2,rep(as.numeric(1), nrow(r2)))
+# combine the two data sets into a single matrix 
+XX<-rbind(r1,r2)
+XX<-XX[sample(seq(1,nrow(XX)),nrow(XX)),]
+
+# # ggplot is sensitive to the data format:so let's turn XX (matrix) into a data.frame
+xfd<-data.frame(X1=XX[,1], X2=XX[,2],src=as.factor(XX[,3]))
+levels(xfd$src)<-c("r1","r2")
+
+orig<-ggplot(xfd, aes(x=xfd$X1,y=xfd$X2,colour=src,shape=21))+geom_point(aes(size=5))+geom_text(aes(label=rownames(xfd)), size=4)+scale_shape_identity()+ggtitle("original")
+
+r3<-mvrnorm(200,c(10,8),as.matrix(X1))
+r4<-mvrnorm(20,c(6,7),as.matrix(X2))
+r3<-cbind(r3,rep(as.numeric(0), nrow(r3)))
+r4<-cbind(r4,rep(as.numeric(1), nrow(r4)))
+# combine the two data sets into a single matrix 
+XT<-rbind(r3,r4)
+
+xft<-data.frame(X1=XT[,1],X2=XT[,2],src=as.factor(XT[,3]))
+# we are renaming the test response variable to match the train values so we can compare Test Vs.Train sets
+levels(xft$src)<-c("r1","r2")
+
+```
+
+```{r, eval=FALSE, echo=TRUE}
+require(MASS)
+require(ggplot2)
+require(corpcor)
+require(FNN)
+require(randomForest)
+require(DMwR)
+require(ROSE)
+require(unbalanced)
+require(UBL)
+require(mlr)
+require(gridExtra)
+
+set.seed(2385)
+# A. build arbitrary covariance matrices 
+
+X1 <- matrix(c(4, 1.2, 2.5, 4), 2)
+
+X2<-matrix(c(7, 3, 3, 8), 2)
+
+# # B. create 4 2-d normally distributed data sets: majority and minority, for a trainig set and a test set.
+r1<-mvrnorm(200,c(10,8),as.matrix(X1))
+r2<-mvrnorm(20,c(6,7),as.matrix(X2)) 
+XX<-rbind(r1,r2)
+XX<-XX[sample(seq(1,nrow(XX)),nrow(XX)),]
+
+# # ggplot is sensitive to the data format:so let's turn XX (matrix) into a data.frame
+xfd<-data.frame(X1=XX[,1], X2=XX[,2],src=as.factor(XX[,3]))
+levels(xfd$src)<-c("r1","r2")
+
+r3<-mvrnorm(200,c(10,8),as.matrix(X1))
+r4<-mvrnorm(20,c(6,7),as.matrix(X2))
+r3<-cbind(r3,rep(as.numeric(0), nrow(r3)))
+r4<-cbind(r4,rep(as.numeric(1), nrow(r4)))
+# combine the two data sets into a single matrix 
+XT<-rbind(r3,r4)
+
+xft<-data.frame(X1=XT[,1],X2=XT[,2],src=as.factor(XT[,3]))
+levels(xft$src)<-c("r1","r2")# we are renaming the test response variable to match the train values so we can compare Test Vs.Train sets
+orig<-ggplot(xfd, aes(x=xfd$X1,y=xfd$X2,colour=src,shape=21))+geom_point(aes(size=5))+geom_text(aes(label=rownames(xfd)), size=4)+scale_shape_identity()+ggtitle("original")
+
+```
+
+
+## Including Plots
+
+let's see what the data looks like:
+
+```{r , echo=FALSE}
+orig
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
